@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>絵文字検索</title>
+<style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    background: #f4f2ee;
+    font-family: 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic', sans-serif;
+  }
+
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100%;
+  }
+
+  /* ── Search bar ── */
+  #search-wrap {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: center;
+    padding: 22px 40px 18px;
+  }
+
+  #search {
+    width: 100%;
+    max-width: 860px;
+    font-size: clamp(18px, 3vw, 28px);
+    font-family: inherit;
+    padding: 14px 20px;
+    border: 2px solid #000;
+    background: rgba(255, 255, 255, 0.50);
+    border-radius: 0;
+    outline: none;
+    color: #111;
+    letter-spacing: 0.03em;
+    box-shadow: 5px 5px 0px rgba(0, 0, 0, 0.50);
+    transition: box-shadow 0.1s;
+    -webkit-appearance: none;
+  }
+
+  #search::placeholder {
+    color: #aaa;
+    font-size: 0.75em;
+    letter-spacing: 0.08em;
+  }
+
+  #search:focus {
+    box-shadow: 7px 7px 0px rgba(0, 0, 0, 0.50);
+  }
+
+  /* ── Status line ── */
+  #status {
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: #999;
+    padding-bottom: 10px;
+    text-transform: uppercase;
+  }
+
+  /* ── Grid scroll area ── */
+  #grid-wrap {
+    flex: 1 1 auto;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    padding: 6px 18px 24px;
+    scrollbar-width: none;
+  }
+  #grid-wrap::-webkit-scrollbar { display: none; }
+
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    gap: 10px;
+  }
+
+  /* ── Individual emoji cell ── */
+  .cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .emoji-display {
+    font-size: 34px;
+    line-height: 1;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* ── Copy button ── */
+  .copy-btn {
+    font-size: 9px;
+    font-family: inherit;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: #333;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1.5px solid #000;
+    border-radius: 0;
+    padding: 3px 6px;
+    cursor: pointer;
+    box-shadow: 2px 2px 0px rgba(0, 0, 0, 0.50);
+    width: 100%;
+    max-width: 64px;
+    text-align: center;
+    -webkit-appearance: none;
+    transition: box-shadow 0.08s, transform 0.08s;
+  }
+
+  .copy-btn:active {
+    box-shadow: 1px 1px 0px rgba(0, 0, 0, 0.50);
+    transform: translate(1px, 1px);
+  }
+
+  .copy-btn.copied {
+    color: #000;
+    background: rgba(220, 255, 220, 0.92);
+  }
+
+  /* ── Empty state ── */
+  #empty {
+    display: none;
+    text-align: center;
+    color: #bbb;
+    font-size: 14px;
+    letter-spacing: 0.1em;
+    padding-top: 60px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="キーワードで絵文字を検索…　例：ハート　笑顔　動物" autocomplete="off" spellcheck="false">
+  </div>
+  <div id="status">読み込み中…</div>
+  <div id="grid-wrap">
+    <div id="grid"></div>
+    <div id="empty">該当する絵文字が見つかりません</div>
+  </div>
+</div>
+
+<script>
+(async () => {
+  const searchEl  = document.getElementById('search');
+  const gridEl    = document.getElementById('grid');
+  const statusEl  = document.getElementById('status');
+  const emptyEl   = document.getElementById('empty');
+
+  let allEmoji = [];
+
+  // ── Load JSON ──
+  try {
+    const res  = await fetch('./emoji_data.json');
+    allEmoji   = await res.json();
+    statusEl.textContent = allEmoji.length + ' 文字';
+    render(allEmoji);
+  } catch (e) {
+    statusEl.textContent = '読み込みエラー — emoji_data.json が見つかりません';
+    console.error(e);
+    return;
+  }
+
+  // ── Search ──
+  searchEl.addEventListener('input', () => {
+    const raw = searchEl.value.trim();
+    if (!raw) {
+      statusEl.textContent = allEmoji.length + ' 文字';
+      render(allEmoji);
+      return;
+    }
+
+    // Split on spaces, commas, fullwidth commas, and ideographic spaces
+    const terms = raw
+      .split(/[\s,、　]+/)
+      .map(t => t.trim())
+      .filter(Boolean);
+
+    if (!terms.length) {
+      render(allEmoji);
+      return;
+    }
+
+    // Score each emoji: how many terms match at least one keyword?
+    const results = [];
+    for (const entry of allEmoji) {
+      let matchCount = 0;
+      for (const term of terms) {
+        const t = term;
+        if (entry.k.some(kw => kw.includes(t) || t.includes(kw))) {
+          matchCount++;
+        }
+      }
+      if (matchCount > 0) {
+        results.push({ entry, score: matchCount });
+      }
+    }
+
+    // Sort by score desc, then preserve original Unicode order within same score
+    results.sort((a, b) => b.score - a.score);
+    const filtered = results.map(r => r.entry);
+
+    statusEl.textContent = filtered.length + ' 文字';
+    render(filtered);
+  });
+
+  // ── Render grid ──
+  function render(list) {
+    if (list.length === 0) {
+      gridEl.innerHTML = '';
+      emptyEl.style.display = 'block';
+      return;
+    }
+    emptyEl.style.display = 'none';
+
+    // Build all DOM in a fragment for speed
+    const frag = document.createDocumentFragment();
+    for (const entry of list) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+
+      const disp = document.createElement('div');
+      disp.className = 'emoji-display';
+      disp.textContent = entry.c;
+
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.textContent = 'COPY';
+      btn.setAttribute('aria-label', 'コピー: ' + entry.c);
+      btn.addEventListener('click', () => copyEmoji(entry.c, btn));
+
+      cell.appendChild(disp);
+      cell.appendChild(btn);
+      frag.appendChild(cell);
+    }
+
+    gridEl.innerHTML = '';
+    gridEl.appendChild(frag);
+    gridEl.parentElement.scrollTop = 0;
+  }
+
+  // ── Copy to clipboard ──
+  function copyEmoji(char, btn) {
+    navigator.clipboard.writeText(char).then(() => {
+      btn.textContent = '✓';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'COPY';
+        btn.classList.remove('copied');
+      }, 900);
+    }).catch(() => {
+      // Fallback for older Chromebook builds
+      const ta = document.createElement('textarea');
+      ta.value = char;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      btn.textContent = '✓';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'COPY';
+        btn.classList.remove('copied');
+      }, 900);
+    });
+  }
+})();
+</script>
+</body>
+</html>
