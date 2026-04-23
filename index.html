@@ -84,8 +84,8 @@
 
   #grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 12px;
   }
 
   /* ── Individual emoji cell ── */
@@ -96,17 +96,71 @@
     gap: 5px;
   }
 
+  /* ── Emoji display (tappable) ── */
   .emoji-display {
-    font-size: 34px;
+    font-size: 68px;
     line-height: 1;
-    height: 44px;
+    height: 84px;
+    width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: default;
-    user-select: text;
-    -webkit-user-select: text;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.07s;
+    position: relative;
   }
+
+  /* Clickable variant emoji get a pointer and a subtle dashed ring */
+  .cell.has-variants .emoji-display {
+    cursor: pointer;
+  }
+  .cell.has-variants .emoji-display::after {
+    content: '';
+    position: absolute;
+    inset: 3px;
+    border: 1.5px dashed rgba(0, 0, 0, 0.16);
+    pointer-events: none;
+  }
+  .cell.has-variants .emoji-display:active {
+    transform: scale(0.88);
+  }
+
+  /* ── Variant dots ── */
+  .variant-dots {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    justify-content: center;
+    height: 11px;
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .vdot {
+    width: 8px;
+    height: 8px;
+    border: 1.5px solid rgba(0, 0, 0, 0.32);
+    background: transparent;
+    flex-shrink: 0;
+    transition: background 0.12s, border-color 0.12s;
+  }
+
+  /* Active base dot */
+  .vdot.active { background: rgba(0,0,0,0.50); border-color: rgba(0,0,0,0.50); }
+
+  /* Skin-tone dot colours */
+  .vdot[data-tone="1"]              { border-color: #c8956c; }
+  .vdot[data-tone="1"].active       { background: #FFDBAC; border-color: #b07840; }
+  .vdot[data-tone="2"]              { border-color: #b07d4a; }
+  .vdot[data-tone="2"].active       { background: #F1C27D; border-color: #9a6530; }
+  .vdot[data-tone="3"]              { border-color: #9a6b34; }
+  .vdot[data-tone="3"].active       { background: #E0AC69; border-color: #835520; }
+  .vdot[data-tone="4"]              { border-color: #8a5a22; }
+  .vdot[data-tone="4"].active       { background: #C68642; border-color: #714510; }
+  .vdot[data-tone="5"]              { border-color: #6b3f18; }
+  .vdot[data-tone="5"].active       { background: #8D5524; border-color: #4a2508; }
 
   /* ── Copy button ── */
   .copy-btn {
@@ -119,13 +173,14 @@
     background: rgba(255, 255, 255, 0.92);
     border: 1.5px solid #000;
     border-radius: 0;
-    padding: 3px 6px;
+    padding: 4px 6px;
     cursor: pointer;
     box-shadow: 2px 2px 0px rgba(0, 0, 0, 0.50);
     width: 100%;
-    max-width: 64px;
+    max-width: 96px;
     text-align: center;
     -webkit-appearance: none;
+    -webkit-tap-highlight-color: transparent;
     transition: box-shadow 0.08s, transform 0.08s;
   }
 
@@ -136,7 +191,7 @@
 
   .copy-btn.copied {
     color: #000;
-    background: rgba(220, 255, 220, 0.92);
+    background: rgba(210, 255, 210, 0.95);
   }
 
   /* ── Empty state ── */
@@ -164,69 +219,102 @@
 
 <script>
 (async () => {
-  const searchEl  = document.getElementById('search');
-  const gridEl    = document.getElementById('grid');
-  const statusEl  = document.getElementById('status');
-  const emptyEl   = document.getElementById('empty');
+  const searchEl = document.getElementById('search');
+  const gridEl   = document.getElementById('grid');
+  const statusEl = document.getElementById('status');
+  const emptyEl  = document.getElementById('empty');
 
   let allEmoji = [];
 
-  // ── Load JSON ──
+  // ─────────────────────────────────────
+  // Skin-tone modifiers  U+1F3FB – U+1F3FF
+  // ─────────────────────────────────────
+  const TONES = ['\u{1F3FB}', '\u{1F3FC}', '\u{1F3FD}', '\u{1F3FE}', '\u{1F3FF}'];
+
+  function getSkeleton(s) {
+    let r = s;
+    for (const t of TONES) r = r.replaceAll(t, '');
+    // Collapse double-ZWJ artifacts
+    r = r.replace(/\u200D{2,}/g, '\u200D').replace(/^\u200D|\u200D$/g, '');
+    return r;
+  }
+
+  function getToneIndex(s) {
+    for (let i = 0; i < TONES.length; i++) {
+      if (s.includes(TONES[i])) return i + 1; // 1–5
+    }
+    return 0; // base
+  }
+
+  // ─────────────────────────────────────
+  // Load JSON
+  // ─────────────────────────────────────
   try {
-    const res  = await fetch('./emoji_data.json');
-    allEmoji   = await res.json();
-    statusEl.textContent = allEmoji.length + ' 文字';
-    render(allEmoji);
+    const res = await fetch('./emoji_data.json');
+    allEmoji  = await res.json();
   } catch (e) {
     statusEl.textContent = '読み込みエラー — emoji_data.json が見つかりません';
     console.error(e);
     return;
   }
 
-  // ── Search ──
+  // ─────────────────────────────────────
+  // Build variant cycles from skin-tone groups
+  // ─────────────────────────────────────
+  const skelMap = new Map(); // skeleton string → [entries]
+
+  for (const entry of allEmoji) {
+    const skel = getSkeleton(entry.c);
+    if (!skelMap.has(skel)) skelMap.set(skel, []);
+    skelMap.get(skel).push(entry);
+  }
+
+  // Sort each group: tone 0 (base) first, then 1–5
+  for (const entries of skelMap.values()) {
+    entries.sort((a, b) => getToneIndex(a.c) - getToneIndex(b.c));
+  }
+
+  // charToVariants: char → ordered cycle array of chars
+  // Only set when the group has more than one member
+  const charToVariants = new Map();
+  for (const entries of skelMap.values()) {
+    if (entries.length > 1) {
+      const cycle = entries.map(e => e.c);
+      for (const entry of entries) charToVariants.set(entry.c, cycle);
+    }
+  }
+
+  // ─────────────────────────────────────
+  // Initial render + search
+  // ─────────────────────────────────────
+  statusEl.textContent = allEmoji.length + ' 文字';
+  render(allEmoji);
+
   searchEl.addEventListener('input', () => {
     const raw = searchEl.value.trim();
-    if (!raw) {
-      statusEl.textContent = allEmoji.length + ' 文字';
-      render(allEmoji);
-      return;
-    }
+    if (!raw) { statusEl.textContent = allEmoji.length + ' 文字'; render(allEmoji); return; }
 
-    // Split on spaces, commas, fullwidth commas, and ideographic spaces
-    const terms = raw
-      .split(/[\s,、　]+/)
-      .map(t => t.trim())
-      .filter(Boolean);
+    const terms = raw.split(/[\s,、　]+/).map(t => t.trim()).filter(Boolean);
+    if (!terms.length) { render(allEmoji); return; }
 
-    if (!terms.length) {
-      render(allEmoji);
-      return;
-    }
-
-    // Score each emoji: how many terms match at least one keyword?
     const results = [];
     for (const entry of allEmoji) {
       let matchCount = 0;
       for (const term of terms) {
-        const t = term;
-        if (entry.k.some(kw => kw.includes(t) || t.includes(kw))) {
-          matchCount++;
-        }
+        if (entry.k.some(kw => kw.includes(term) || term.includes(kw))) matchCount++;
       }
-      if (matchCount > 0) {
-        results.push({ entry, score: matchCount });
-      }
+      if (matchCount > 0) results.push({ entry, score: matchCount });
     }
-
-    // Sort by score desc, then preserve original Unicode order within same score
     results.sort((a, b) => b.score - a.score);
-    const filtered = results.map(r => r.entry);
 
+    const filtered = results.map(r => r.entry);
     statusEl.textContent = filtered.length + ' 文字';
     render(filtered);
   });
 
-  // ── Render grid ──
+  // ─────────────────────────────────────
+  // Render grid
+  // ─────────────────────────────────────
   function render(list) {
     if (list.length === 0) {
       gridEl.innerHTML = '';
@@ -235,24 +323,50 @@
     }
     emptyEl.style.display = 'none';
 
-    // Build all DOM in a fragment for speed
     const frag = document.createDocumentFragment();
-    for (const entry of list) {
-      const cell = document.createElement('div');
-      cell.className = 'cell';
 
+    for (const entry of list) {
+      const variants    = charToVariants.get(entry.c); // undefined if none
+      const hasVariants = !!variants;
+
+      // Start at this emoji's position in the cycle
+      let currentIdx = hasVariants ? Math.max(0, variants.indexOf(entry.c)) : 0;
+      const currentChar = () => hasVariants ? variants[currentIdx] : entry.c;
+
+      // ── Cell ──
+      const cell = document.createElement('div');
+      cell.className = 'cell' + (hasVariants ? ' has-variants' : '');
+
+      // ── Emoji display ──
       const disp = document.createElement('div');
       disp.className = 'emoji-display';
-      disp.textContent = entry.c;
+      disp.textContent = currentChar();
+      if (hasVariants) {
+        disp.title = 'タップでバリエーション切替';
+        disp.addEventListener('click', () => {
+          currentIdx = (currentIdx + 1) % variants.length;
+          disp.textContent = currentChar();
+          updateDots(dotsEl, variants, currentIdx);
+        });
+      }
+      cell.appendChild(disp);
 
+      // ── Variant dots ──
+      let dotsEl = null;
+      if (hasVariants) {
+        dotsEl = document.createElement('div');
+        dotsEl.className = 'variant-dots';
+        buildDots(dotsEl, variants, currentIdx);
+        cell.appendChild(dotsEl);
+      }
+
+      // ── COPY button ──
       const btn = document.createElement('button');
       btn.className = 'copy-btn';
       btn.textContent = 'COPY';
-      btn.setAttribute('aria-label', 'コピー: ' + entry.c);
-      btn.addEventListener('click', () => copyEmoji(entry.c, btn));
-
-      cell.appendChild(disp);
+      btn.addEventListener('click', () => copyChar(currentChar(), btn));
       cell.appendChild(btn);
+
       frag.appendChild(cell);
     }
 
@@ -261,34 +375,52 @@
     gridEl.parentElement.scrollTop = 0;
   }
 
-  // ── Copy to clipboard ──
-  function copyEmoji(char, btn) {
-    navigator.clipboard.writeText(char).then(() => {
-      btn.textContent = '✓';
-      btn.classList.add('copied');
-      setTimeout(() => {
-        btn.textContent = 'COPY';
-        btn.classList.remove('copied');
-      }, 900);
-    }).catch(() => {
-      // Fallback for older Chromebook builds
-      const ta = document.createElement('textarea');
-      ta.value = char;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      btn.textContent = '✓';
-      btn.classList.add('copied');
-      setTimeout(() => {
-        btn.textContent = 'COPY';
-        btn.classList.remove('copied');
-      }, 900);
+  // ─────────────────────────────────────
+  // Dot helpers
+  // ─────────────────────────────────────
+  function buildDots(container, variants, activeIdx) {
+    for (let i = 0; i < variants.length; i++) {
+      const dot = document.createElement('div');
+      dot.className = 'vdot' + (i === activeIdx ? ' active' : '');
+      const tone = getToneIndex(variants[i]);
+      if (tone > 0) dot.dataset.tone = tone;
+      container.appendChild(dot);
+    }
+  }
+
+  function updateDots(container, variants, activeIdx) {
+    container.querySelectorAll('.vdot').forEach((dot, i) => {
+      dot.classList.toggle('active', i === activeIdx);
     });
   }
+
+  // ─────────────────────────────────────
+  // Clipboard
+  // ─────────────────────────────────────
+  function copyChar(char, btn) {
+    const flash = () => {
+      btn.textContent = '✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'COPY'; btn.classList.remove('copied'); }, 900);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(char).then(flash).catch(() => fallbackCopy(char, flash));
+    } else {
+      fallbackCopy(char, flash);
+    }
+  }
+
+  function fallbackCopy(char, cb) {
+    const ta = document.createElement('textarea');
+    ta.value = char;
+    ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try { document.execCommand('copy'); } catch (_) {}
+    document.body.removeChild(ta);
+    cb();
+  }
+
 })();
 </script>
 </body>
