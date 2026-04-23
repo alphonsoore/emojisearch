@@ -96,7 +96,7 @@
     gap: 5px;
   }
 
-  /* ── Emoji display (tappable) ── */
+  /* ── Emoji display ── */
   .emoji-display {
     font-size: 68px;
     line-height: 1;
@@ -108,11 +108,11 @@
     user-select: none;
     -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
-    transition: transform 0.07s;
     position: relative;
+    cursor: default;
   }
 
-  /* Clickable variant emoji get a pointer and a subtle dashed ring */
+  /* Variant-capable cells: pointer cursor + dashed ring */
   .cell.has-variants .emoji-display {
     cursor: pointer;
   }
@@ -120,7 +120,7 @@
     content: '';
     position: absolute;
     inset: 3px;
-    border: 1.5px dashed rgba(0, 0, 0, 0.16);
+    border: 1.5px dashed rgba(0, 0, 0, 0.18);
     pointer-events: none;
   }
   .cell.has-variants .emoji-display:active {
@@ -141,26 +141,24 @@
   .vdot {
     width: 8px;
     height: 8px;
-    border: 1.5px solid rgba(0, 0, 0, 0.32);
+    border: 1.5px solid rgba(0, 0, 0, 0.30);
     background: transparent;
     flex-shrink: 0;
     transition: background 0.12s, border-color 0.12s;
   }
-
-  /* Active base dot */
   .vdot.active { background: rgba(0,0,0,0.50); border-color: rgba(0,0,0,0.50); }
 
-  /* Skin-tone dot colours */
-  .vdot[data-tone="1"]              { border-color: #c8956c; }
-  .vdot[data-tone="1"].active       { background: #FFDBAC; border-color: #b07840; }
-  .vdot[data-tone="2"]              { border-color: #b07d4a; }
-  .vdot[data-tone="2"].active       { background: #F1C27D; border-color: #9a6530; }
-  .vdot[data-tone="3"]              { border-color: #9a6b34; }
-  .vdot[data-tone="3"].active       { background: #E0AC69; border-color: #835520; }
-  .vdot[data-tone="4"]              { border-color: #8a5a22; }
-  .vdot[data-tone="4"].active       { background: #C68642; border-color: #714510; }
-  .vdot[data-tone="5"]              { border-color: #6b3f18; }
-  .vdot[data-tone="5"].active       { background: #8D5524; border-color: #4a2508; }
+  /* Skin-tone dot colours: 1=lightest … 5=darkest */
+  .vdot[data-tone="1"]        { border-color: #c8956c; }
+  .vdot[data-tone="1"].active { background: #FFDBAC; border-color: #b07840; }
+  .vdot[data-tone="2"]        { border-color: #b07d4a; }
+  .vdot[data-tone="2"].active { background: #F1C27D; border-color: #9a6530; }
+  .vdot[data-tone="3"]        { border-color: #9a6b34; }
+  .vdot[data-tone="3"].active { background: #E0AC69; border-color: #835520; }
+  .vdot[data-tone="4"]        { border-color: #8a5a22; }
+  .vdot[data-tone="4"].active { background: #C68642; border-color: #714510; }
+  .vdot[data-tone="5"]        { border-color: #6b3f18; }
+  .vdot[data-tone="5"].active { background: #8D5524; border-color: #4a2508; }
 
   /* ── Copy button ── */
   .copy-btn {
@@ -183,18 +181,16 @@
     -webkit-tap-highlight-color: transparent;
     transition: box-shadow 0.08s, transform 0.08s;
   }
-
   .copy-btn:active {
     box-shadow: 1px 1px 0px rgba(0, 0, 0, 0.50);
     transform: translate(1px, 1px);
   }
-
   .copy-btn.copied {
     color: #000;
     background: rgba(210, 255, 210, 0.95);
   }
 
-  /* ── Empty state ── */
+  /* ── Empty / error state ── */
   #empty {
     display: none;
     text-align: center;
@@ -224,86 +220,56 @@
   const statusEl = document.getElementById('status');
   const emptyEl  = document.getElementById('empty');
 
-  let allEmoji = [];
-
-  // ─────────────────────────────────────
-  // Skin-tone modifiers  U+1F3FB – U+1F3FF
-  // ─────────────────────────────────────
+  // Skin-tone modifier codepoints, in order lightest→darkest
   const TONES = ['\u{1F3FB}', '\u{1F3FC}', '\u{1F3FD}', '\u{1F3FE}', '\u{1F3FF}'];
-
-  function getSkeleton(s) {
-    let r = s;
-    for (const t of TONES) r = r.replaceAll(t, '');
-    // Collapse double-ZWJ artifacts
-    r = r.replace(/\u200D{2,}/g, '\u200D').replace(/^\u200D|\u200D$/g, '');
-    return r;
-  }
 
   function getToneIndex(s) {
     for (let i = 0; i < TONES.length; i++) {
       if (s.includes(TONES[i])) return i + 1; // 1–5
     }
-    return 0; // base
+    return 0; // base (no tone)
   }
 
-  // ─────────────────────────────────────
-  // Load JSON
-  // ─────────────────────────────────────
+  // ── Load both data files in parallel ──
+  let allEmoji = [], variantMap = {};
   try {
-    const res = await fetch('./emoji_data.json');
-    allEmoji  = await res.json();
+    const [emojiRes, variantRes] = await Promise.all([
+      fetch('./emoji_data.json'),
+      fetch('./variant_map.json')
+    ]);
+    allEmoji   = await emojiRes.json();
+    variantMap = await variantRes.json();
   } catch (e) {
-    statusEl.textContent = '読み込みエラー — emoji_data.json が見つかりません';
+    statusEl.textContent = '読み込みエラー — JSON ファイルが見つかりません';
     console.error(e);
     return;
   }
 
-  // ─────────────────────────────────────
-  // Build variant cycles from skin-tone groups
-  // ─────────────────────────────────────
-  const skelMap = new Map(); // skeleton string → [entries]
+  // variantMap: { "👋": ["👋","👋🏻","👋🏼","👋🏽","👋🏾","👋🏿"], ... }
+  // This is authoritative — built from Unicode data, not the keyword JSON.
 
-  for (const entry of allEmoji) {
-    const skel = getSkeleton(entry.c);
-    if (!skelMap.has(skel)) skelMap.set(skel, []);
-    skelMap.get(skel).push(entry);
-  }
-
-  // Sort each group: tone 0 (base) first, then 1–5
-  for (const entries of skelMap.values()) {
-    entries.sort((a, b) => getToneIndex(a.c) - getToneIndex(b.c));
-  }
-
-  // charToVariants: char → ordered cycle array of chars
-  // Only set when the group has more than one member
-  const charToVariants = new Map();
-  for (const entries of skelMap.values()) {
-    if (entries.length > 1) {
-      const cycle = entries.map(e => e.c);
-      for (const entry of entries) charToVariants.set(entry.c, cycle);
-    }
-  }
-
-  // ─────────────────────────────────────
-  // Initial render + search
-  // ─────────────────────────────────────
   statusEl.textContent = allEmoji.length + ' 文字';
   render(allEmoji);
 
+  // ── Search ──
   searchEl.addEventListener('input', () => {
     const raw = searchEl.value.trim();
-    if (!raw) { statusEl.textContent = allEmoji.length + ' 文字'; render(allEmoji); return; }
+    if (!raw) {
+      statusEl.textContent = allEmoji.length + ' 文字';
+      render(allEmoji);
+      return;
+    }
 
     const terms = raw.split(/[\s,、　]+/).map(t => t.trim()).filter(Boolean);
     if (!terms.length) { render(allEmoji); return; }
 
     const results = [];
     for (const entry of allEmoji) {
-      let matchCount = 0;
+      let score = 0;
       for (const term of terms) {
-        if (entry.k.some(kw => kw.includes(term) || term.includes(kw))) matchCount++;
+        if (entry.k.some(kw => kw.includes(term) || term.includes(kw))) score++;
       }
-      if (matchCount > 0) results.push({ entry, score: matchCount });
+      if (score > 0) results.push({ entry, score });
     }
     results.sort((a, b) => b.score - a.score);
 
@@ -312,9 +278,7 @@
     render(filtered);
   });
 
-  // ─────────────────────────────────────
-  // Render grid
-  // ─────────────────────────────────────
+  // ── Render grid ──
   function render(list) {
     if (list.length === 0) {
       gridEl.innerHTML = '';
@@ -326,11 +290,11 @@
     const frag = document.createDocumentFragment();
 
     for (const entry of list) {
-      const variants    = charToVariants.get(entry.c); // undefined if none
-      const hasVariants = !!variants;
+      // Look up this emoji's cycle in the variant map
+      const variants    = variantMap[entry.c]; // array or undefined
+      const hasVariants = Array.isArray(variants) && variants.length > 1;
 
-      // Start at this emoji's position in the cycle
-      let currentIdx = hasVariants ? Math.max(0, variants.indexOf(entry.c)) : 0;
+      let currentIdx = 0; // always start at base (index 0)
       const currentChar = () => hasVariants ? variants[currentIdx] : entry.c;
 
       // ── Cell ──
@@ -342,16 +306,16 @@
       disp.className = 'emoji-display';
       disp.textContent = currentChar();
       if (hasVariants) {
-        disp.title = 'タップでバリエーション切替';
+        disp.title = 'クリックでバリエーション切替 (肌の色など)';
         disp.addEventListener('click', () => {
           currentIdx = (currentIdx + 1) % variants.length;
           disp.textContent = currentChar();
-          updateDots(dotsEl, variants, currentIdx);
+          updateDots(dotsEl, currentIdx);
         });
       }
       cell.appendChild(disp);
 
-      // ── Variant dots ──
+      // ── Variant dots (skin-tone indicator) ──
       let dotsEl = null;
       if (hasVariants) {
         dotsEl = document.createElement('div');
@@ -360,7 +324,7 @@
         cell.appendChild(dotsEl);
       }
 
-      // ── COPY button ──
+      // ── COPY button — always copies what is currently displayed ──
       const btn = document.createElement('button');
       btn.className = 'copy-btn';
       btn.textContent = 'COPY';
@@ -375,9 +339,7 @@
     gridEl.parentElement.scrollTop = 0;
   }
 
-  // ─────────────────────────────────────
-  // Dot helpers
-  // ─────────────────────────────────────
+  // ── Dot helpers ──
   function buildDots(container, variants, activeIdx) {
     for (let i = 0; i < variants.length; i++) {
       const dot = document.createElement('div');
@@ -388,15 +350,13 @@
     }
   }
 
-  function updateDots(container, variants, activeIdx) {
+  function updateDots(container, activeIdx) {
     container.querySelectorAll('.vdot').forEach((dot, i) => {
       dot.classList.toggle('active', i === activeIdx);
     });
   }
 
-  // ─────────────────────────────────────
-  // Clipboard
-  // ─────────────────────────────────────
+  // ── Clipboard ──
   function copyChar(char, btn) {
     const flash = () => {
       btn.textContent = '✓';
